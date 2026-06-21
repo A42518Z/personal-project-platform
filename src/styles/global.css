@@ -1,0 +1,19 @@
+html, body, #app { margin: 0; width: 100%; height: 100%; font-family: Arial, "Microsoft YaHei", sans-serif; color: #1f2f3d; }
+* { box-sizing: border-box; }
+.page { display: flex; flex-direction: column; gap: 18px; }
+.page-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.page-title h2 { margin: 0 0 8px; font-size: 22px; color: #1f2f3d; }
+.page-title p { margin: 0; color: #697b8c; font-size: 14px; }
+.card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,21,41,.08); padding: 18px; }
+.stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.stat-card { background: #fff; border-radius: 8px; padding: 18px; box-shadow: 0 1px 4px rgba(0,21,41,.08); position: relative; overflow: hidden; }
+.stat-card::after { content: ''; position: absolute; right: -20px; top: -20px; width: 72px; height: 72px; border-radius: 50%; background: rgba(64,158,255,.12); }
+.stat-value { font-size: 28px; font-weight: 700; margin-top: 8px; }
+.stat-label { color: #697b8c; font-size: 13px; }
+.action-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.action-card { padding: 18px; border: 1px solid #ebeef5; border-radius: 8px; cursor: pointer; transition: .2s; background: #fff; }
+.action-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,21,41,.08); border-color: #409eff; }
+.action-card h3 { margin: 0 0 8px; font-size: 16px; }
+.action-card p { margin: 0; color: #697b8c; line-height: 1.6; }
+@media (max-width: 1100px) { .stat-grid, .action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .stat-grid, .action-grid { grid-template-columns: 1fr; } }
