@@ -110,7 +110,7 @@
             <div class="toggle-row"><el-checkbox v-model="tableForm.PhysicsDel">物理删除</el-checkbox><el-checkbox v-model="tableForm.multiTenancy">多租户</el-checkbox><el-checkbox v-model="tableForm.IsVisible">可见(自动脱敏)</el-checkbox></div>
           </div>
         </el-form>
-        <field-editor v-model="fieldRows" />
+        <FieldDesigner v-model="fieldRows" :table-name="String(tableForm.tblname || '')" />
       </div>
       <view-editor v-else v-model="viewForm" />
       <template #footer><el-button @click="addDialog.visible=false">取消</el-button><el-button type="primary" :loading="addDialog.loading" @click="submitAdd">保存</el-button></template>
@@ -131,10 +131,13 @@
             </div>
           </el-form>
           <div class="field-toolbar"><el-button type="primary" @click="addFieldRow">新建</el-button><el-button type="primary" plain @click="systemFieldVisible=true">查看系统字段</el-button><el-button type="primary" plain @click="autoDescribeFields">一键加描述</el-button><el-button type="primary" plain disabled>编码设计</el-button><el-button type="primary" plain :loading="fieldLoading" @click="loadSelectedFields">同步元数据</el-button><el-button type="primary" plain @click="aiFillFields">AI填表</el-button></div>
-          <field-editor v-model="fieldRows" @delete-existing="deletedFields.push($event)" />
+          <FieldDesigner v-model="fieldRows" :table-name="String(tableForm.tblname || '')" @delete-existing="markFieldDeleted" />
         </el-tab-pane>
         <el-tab-pane label="关系" name="relation">
-          <div class="relation-panel"><el-alert title="关系管理入口已复刻。当前先展示和维护元数据字段；关系表保存将在后端能力确定后接入。" type="info" :closable="false" /><el-table :data="relationRows" border height="420" style="margin-top:12px"><el-table-column prop="pkdbName" label="主表数据库" /><el-table-column prop="pktbName" label="主表表名" /><el-table-column prop="fkdbName" label="从表数据库" /><el-table-column prop="fktbName" label="从表表名" /><el-table-column prop="rlname" label="关系表达式" /></el-table></div>
+          <div class="relation-panel relation-panel--designer">
+            <TableRelationDesigner v-if="rowIdOf(tableForm)" :table="tableForm" height="640px" />
+            <el-empty v-else description="请先保存表元数据后再设计关系" />
+          </div>
         </el-tab-pane>
         <el-tab-pane label="数据流" name="flow"><el-empty description="数据流设计入口已保留，后续接工作流定义表" /></el-tab-pane>
         <el-tab-pane label="数据" name="data"><data-preview :table-name="String(tableForm.tblname || '')" /></el-tab-pane>
@@ -143,9 +146,32 @@
         <view-editor v-model="viewForm" />
         <data-preview :table-name="String(viewForm.vewname || '')" />
       </div>
-      <template #footer><el-button @click="designDialog.visible=false">取消</el-button><el-button type="primary" :loading="designDialog.loading" @click="submitDesign">保存</el-button></template>
+      <template #footer><el-button @click="designDialog.visible=false">取消</el-button><el-button type="primary" :loading="designDialog.loading" @click="requestSubmitDesign">保存</el-button></template>
     </el-dialog>
 
+
+    <el-dialog v-model="saveSummaryDialog.visible" title="保存前变更摘要" width="760px" append-to-body>
+      <div class="change-summary">
+        <el-alert v-if="saveSummaryDialog.risks.length" type="warning" :closable="false" title="请确认以下风险" />
+        <div v-if="saveSummaryDialog.risks.length" class="change-summary__risks">
+          <el-tag v-for="item in saveSummaryDialog.risks" :key="item" type="warning" effect="light">{{ item }}</el-tag>
+        </div>
+        <div class="change-summary__stats">
+          <article><span>新增字段</span><strong>{{ saveSummaryDialog.added.length }}</strong></article>
+          <article><span>修改字段</span><strong>{{ saveSummaryDialog.changed.length }}</strong></article>
+          <article><span>删除字段</span><strong>{{ saveSummaryDialog.deleted.length }}</strong></article>
+        </div>
+        <el-tabs model-value="added" class="change-summary__tabs">
+          <el-tab-pane label="新增" name="added"><el-table :data="saveSummaryDialog.added" border height="180"><el-table-column prop="enname" label="字段名" /><el-table-column prop="cnname" label="描述" /><el-table-column prop="DataTypeName" label="类型" /></el-table></el-tab-pane>
+          <el-tab-pane label="修改" name="changed"><el-table :data="saveSummaryDialog.changed" border height="180"><el-table-column prop="enname" label="字段名" /><el-table-column prop="changeText" label="变化" show-overflow-tooltip /></el-table></el-tab-pane>
+          <el-tab-pane label="删除" name="deleted"><el-table :data="saveSummaryDialog.deleted" border height="180"><el-table-column prop="enname" label="字段名" /><el-table-column prop="cnname" label="描述" /><el-table-column prop="DataTypeName" label="类型" /></el-table></el-tab-pane>
+        </el-tabs>
+      </div>
+      <template #footer>
+        <el-button @click="saveSummaryDialog.visible=false">返回继续编辑</el-button>
+        <el-button type="primary" :loading="designDialog.loading" @click="confirmDesignSummary">确认保存</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="relationDialog.visible" title="表关系设计" width="1500px" append-to-body destroy-on-close class="relation-dialog-wrap">
       <TableRelationDesigner v-if="relationDialog.currentTable" :table="relationDialog.currentTable" height="640px" />
@@ -165,34 +191,7 @@ import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { dbDescOf, dbIdOf, dbNameOf, deleteTableMeta, deleteViewMeta, fieldTypeOptions, newGuid, queryDatabases, queryDataPreview, queryFields, queryTables, queryViews, queryTableRelations, rowIdOf, saveFields, saveTableMeta, saveViewMeta, copyTableMeta, type DbRecord, type FieldRecord, type TableRecord, type TableRelationRecord, type ViewRecord } from '@/api/tableAndView'
 import type { AnyRow } from '@/api/lowcode'
 import TableRelationDesigner from '@/views/platform/table-relation-designer/index.vue'
-
-const FieldEditor = defineComponent({
-  name: 'FieldEditor',
-  props: { modelValue: { type: Array, required: true } },
-  emits: ['update:modelValue', 'delete-existing'],
-  setup(props, { emit }) {
-    const rows = computed({ get: () => props.modelValue as FieldRecord[], set: (value) => emit('update:modelValue', value) })
-    function add() { rows.value = [...rows.value, { enname: '', cnname: '', DataTypeName: '字符串型', DataLen: '100', IsPKey: 0, IsNill: 1, IsUQ: 0, isGrowth: 0 }] }
-    function remove(row: FieldRecord, index: number) { if (rowIdOf(row)) emit('delete-existing', row); rows.value = rows.value.filter((_item, i) => i !== index) }
-    return () => h('div', { class: 'field-panel' }, [
-      h('div', { class: 'field-panel__header' }, [h('span', '字段'), h('div', { class: 'field-panel__actions' }, [h(resolveComponent('el-button'), { type: 'primary', onClick: add }, () => '新增')])]),
-      h(resolveComponent('el-table'), { data: rows.value, border: true, height: 420 }, () => [
-        h(resolveComponent('el-table-column'), { label: '字段', minWidth: 150 }, { default: ({ row }: any) => h(resolveComponent('el-input'), { modelValue: row.enname, 'onUpdate:modelValue': (v: string) => row.enname = v }) }),
-        h(resolveComponent('el-table-column'), { label: '描述', minWidth: 150 }, { default: ({ row }: any) => h(resolveComponent('el-input'), { modelValue: row.cnname, 'onUpdate:modelValue': (v: string) => row.cnname = v }) }),
-        h(resolveComponent('el-table-column'), { label: '字段类型', minWidth: 140 }, { default: ({ row }: any) => h(resolveComponent('el-select'), { modelValue: row.DataTypeName, 'onUpdate:modelValue': (v: string) => row.DataTypeName = v, clearable: true }, () => fieldTypeOptions.map(opt => h(resolveComponent('el-option'), { label: opt.label, value: opt.value, key: opt.value }))) }),
-        h(resolveComponent('el-table-column'), { label: '长度', width: 90 }, { default: ({ row }: any) => h(resolveComponent('el-input'), { modelValue: row.DataLen, 'onUpdate:modelValue': (v: string) => row.DataLen = v }) }),
-        h(resolveComponent('el-table-column'), { label: '主键', width: 70, align: 'center' }, { default: ({ row }: any) => h(resolveComponent('el-checkbox'), { modelValue: Boolean(Number(row.IsPKey)), 'onUpdate:modelValue': (v: boolean) => row.IsPKey = v ? 1 : 0 }) }),
-        h(resolveComponent('el-table-column'), { label: '允许为空', width: 92, align: 'center' }, { default: ({ row }: any) => h(resolveComponent('el-checkbox'), { modelValue: Boolean(Number(row.IsNill)), 'onUpdate:modelValue': (v: boolean) => row.IsNill = v ? 1 : 0 }) }),
-        h(resolveComponent('el-table-column'), { label: '唯一', width: 76, align: 'center' }, { default: ({ row }: any) => h(resolveComponent('el-checkbox'), { modelValue: Boolean(Number(row.IsUQ)), 'onUpdate:modelValue': (v: boolean) => row.IsUQ = v ? 1 : 0 }) }),
-        h(resolveComponent('el-table-column'), { label: '自增长', width: 90, align: 'center' }, { default: ({ row }: any) => h(resolveComponent('el-checkbox'), { modelValue: Boolean(Number(row.isGrowth)), 'onUpdate:modelValue': (v: boolean) => row.isGrowth = v ? 1 : 0 }) }),
-        h(resolveComponent('el-table-column'), { label: '默认值', minWidth: 120 }, { default: ({ row }: any) => h(resolveComponent('el-input'), { modelValue: row.DefaultValue, 'onUpdate:modelValue': (v: string) => row.DefaultValue = v }) }),
-        h(resolveComponent('el-table-column'), { label: '别名', minWidth: 100 }, { default: ({ row }: any) => h(resolveComponent('el-input'), { modelValue: row.AsName, 'onUpdate:modelValue': (v: string) => row.AsName = v }) }),
-        h(resolveComponent('el-table-column'), { label: '备注', minWidth: 120 }, { default: ({ row }: any) => h(resolveComponent('el-input'), { modelValue: row.Memo, 'onUpdate:modelValue': (v: string) => row.Memo = v }) }),
-        h(resolveComponent('el-table-column'), { label: '操作', width: 80, fixed: 'right' }, { default: ({ row, $index }: any) => h(resolveComponent('el-button'), { type: 'danger', link: true, onClick: () => remove(row, $index) }, () => '删除') })
-      ])
-    ])
-  }
-})
+import FieldDesigner from '@/components/FieldDesigner/index.vue'
 
 const ViewEditor = defineComponent({
   name: 'ViewEditor',
@@ -249,6 +248,8 @@ const tableForm = reactive<TableRecord>({})
 const viewForm = reactive<ViewRecord>({})
 const fieldRows = ref<FieldRecord[]>([])
 const deletedFields = ref<FieldRecord[]>([])
+const originalTableSnapshot = ref<AnyRow | null>(null)
+const originalFieldsSnapshot = ref<FieldRecord[]>([])
 const relationRows = ref<AnyRow[]>([])
 const systemFieldVisible = ref(false)
 const systemFields = computed(() => fieldRows.value.filter((item) => Number((item as AnyRow).IsSys) === 1))
@@ -256,6 +257,13 @@ const systemFields = computed(() => fieldRows.value.filter((item) => Number((ite
 const registerDialog = reactive({ visible: false, loading: false, form: { name: '', desc: '', sql: '' } })
 const addDialog = reactive({ visible: false, loading: false })
 const designDialog = reactive({ visible: false, loading: false })
+const saveSummaryDialog = reactive({
+  visible: false,
+  added: [] as FieldRecord[],
+  changed: [] as Array<FieldRecord & { changeText: string }>,
+  deleted: [] as FieldRecord[],
+  risks: [] as string[]
+})
 const copyDialog = reactive({ visible: false, loading: false, source: null as TableRecord | null, form: { tblname: '', tbldesc: '' } })
 const relationDialog = reactive({
   visible: false,
@@ -317,15 +325,21 @@ function handleReset() { searchForm.keyword = ''; searchForm.cnName = ''; search
 function handleObjectSizeChange() { objectPage.pageIndex = 1; loadObjects() }
 
 function openRegisterDialog() { registerDialog.form.name = ''; registerDialog.form.desc = ''; registerDialog.form.sql = ''; registerDialog.visible = true }
-function openAddDialog() { activeTab.value === 'table' ? resetTableForm() : resetViewForm(); fieldRows.value = []; addDialog.visible = true }
+function openAddDialog() { activeTab.value === 'table' ? resetTableForm() : resetViewForm(); fieldRows.value = []; deletedFields.value = []; addDialog.visible = true }
 async function openDesignDialog(row: AnyRow) {
   if (activeTab.value === 'table') {
     resetTableForm(row as TableRecord)
+    deletedFields.value = []
     await loadSelectedFields()
+    originalTableSnapshot.value = cleanRuntimeRow(tableForm)
+    originalFieldsSnapshot.value = fieldRows.value.map(cleanRuntimeRow) as FieldRecord[]
     designTab.value = 'design'
   } else {
+    deletedFields.value = []
     resetViewForm(row as ViewRecord)
     fieldRows.value = (await queryFields(rowIdOf(row))).list
+    originalTableSnapshot.value = cleanRuntimeRow(viewForm)
+    originalFieldsSnapshot.value = fieldRows.value.map(cleanRuntimeRow) as FieldRecord[]
   }
   designDialog.visible = true
 }
@@ -372,7 +386,7 @@ async function loadSelectedFields() {
   const id = rowIdOf(tableForm)
   if (!id) return
   fieldLoading.value = true
-  try { fieldRows.value = (await queryFields(id)).list } finally { fieldLoading.value = false }
+  try { fieldRows.value = (await queryFields(id)).list.sort((a, b) => Number(a.ordIdx || 0) - Number(b.ordIdx || 0)) } finally { fieldLoading.value = false }
 }
 
 function validateObjectName(name: string) { return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(name || '').trim()) }
@@ -408,7 +422,7 @@ async function submitAdd() {
       tableForm.rowid = rowid
       tableForm.dbid = currentDatabase.value ? dbIdOf(currentDatabase.value) : tableForm.dbid
       await saveTableMeta(tableForm, 'add')
-      if (fieldRows.value.length) await saveFields(fieldRows.value.map((item) => ({ ...item, tblid: rowid, tblname: tableForm.tblname })))
+      if (fieldRows.value.length) await saveFields(fieldRows.value.map((item) => cleanRuntimeRow({ ...item, tblid: rowid, tblname: tableForm.tblname })))
     } else {
       if (!validateObjectName(String(viewForm.vewname || ''))) throw new Error('视图名格式不正确')
       viewForm.dbid = currentDatabase.value ? dbIdOf(currentDatabase.value) : viewForm.dbid
@@ -420,17 +434,77 @@ async function submitAdd() {
   } catch (error: any) { ElMessage.error(error?.message || '新增失败') } finally { addDialog.loading = false }
 }
 
+function cleanRuntimeRow<T extends AnyRow>(row: T): T {
+  const next = { ...row }
+  delete next.__designerKey
+  delete next._rowid
+  return next
+}
+
+function markFieldDeleted(row: FieldRecord) {
+  if (!deletedFields.value.some((item) => rowIdOf(item) === rowIdOf(row))) deletedFields.value.push(row)
+}
+
+function summarizeFieldChange(before: FieldRecord, after: FieldRecord) {
+  const keys = ['enname', 'cnname', 'DataTypeName', 'DataLen', 'IsPKey', 'IsNill', 'IsUQ', 'isGrowth', 'DefaultValue', 'AsName', 'Memo', 'UseCtrlName', 'allowAIAdd', 'ordIdx']
+  return keys.filter((key) => String((before as AnyRow)[key] ?? '') !== String((after as AnyRow)[key] ?? '')).map((key) => key + ': ' + String((before as AnyRow)[key] ?? '-') + ' → ' + String((after as AnyRow)[key] ?? '-')).join('；')
+}
+
+function buildDesignChangeSummary() {
+  const originalMap = new Map(originalFieldsSnapshot.value.map((row) => [rowIdOf(row), row]))
+  const added: FieldRecord[] = []
+  const changed: Array<FieldRecord & { changeText: string }> = []
+  fieldRows.value.forEach((row) => {
+    const id = rowIdOf(row)
+    const clean = cleanRuntimeRow(row)
+    if (!id) {
+      added.push(clean as FieldRecord)
+      return
+    }
+    const before = originalMap.get(id)
+    if (!before) return
+    const changeText = summarizeFieldChange(before, clean as FieldRecord)
+    if (changeText) changed.push({ ...(clean as FieldRecord), changeText })
+  })
+  const deleted = deletedFields.value.map(cleanRuntimeRow) as FieldRecord[]
+  const risks: string[] = []
+  if (activeTab.value === 'table' && !fieldRows.value.some((row) => Number(row.IsPKey) === 1)) risks.push('当前表没有主键字段')
+  deleted.forEach((row) => {
+    if (Number((row as AnyRow).IsSys) === 1) risks.push('将删除系统字段：' + (row.enname || rowIdOf(row)))
+    risks.push('删除字段需确认是否被关系/视图/表达式引用：' + (row.enname || rowIdOf(row)))
+  })
+  saveSummaryDialog.added = added
+  saveSummaryDialog.changed = changed
+  saveSummaryDialog.deleted = deleted
+  saveSummaryDialog.risks = Array.from(new Set(risks))
+}
+
+async function requestSubmitDesign() {
+  try {
+    if (activeTab.value === 'table') validateFields()
+    buildDesignChangeSummary()
+    saveSummaryDialog.visible = true
+  } catch (error: any) {
+    ElMessage.error(error?.message || '校验失败')
+  }
+}
+
+async function confirmDesignSummary() {
+  saveSummaryDialog.visible = false
+  await submitDesign()
+}
+
 async function submitDesign() {
   designDialog.loading = true
   try {
     if (activeTab.value === 'table') {
       validateFields()
       await saveTableMeta(tableForm, 'edit')
-      await saveFields(fieldRows.value.map((item) => ({ ...item, tblid: rowIdOf(tableForm), tblname: tableForm.tblname })), deletedFields.value)
+      await saveFields(fieldRows.value.map((item) => cleanRuntimeRow({ ...item, tblid: rowIdOf(tableForm), tblname: tableForm.tblname })), deletedFields.value.map(cleanRuntimeRow) as FieldRecord[])
       deletedFields.value = []
     } else {
       await saveViewMeta(viewForm, 'edit')
-      if (fieldRows.value.length) await saveFields(fieldRows.value.map((item) => ({ ...item, tblid: rowIdOf(viewForm), tblname: viewForm.vewname })))
+      if (fieldRows.value.length) await saveFields(fieldRows.value.map((item) => cleanRuntimeRow({ ...item, tblid: rowIdOf(viewForm), tblname: viewForm.vewname })))
     }
     ElMessage.success('保存成功')
     designDialog.visible = false
@@ -623,6 +697,14 @@ onMounted(loadDatabases)
 .field-toolbar { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .design-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
 .relation-panel { min-height: 520px; }
+.relation-panel--designer { min-height: 680px; }
+.change-summary { display: flex; flex-direction: column; gap: 14px; }
+.change-summary__risks { display: flex; gap: 8px; flex-wrap: wrap; }
+.change-summary__stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.change-summary__stats article { padding: 12px; border: 1px solid #dbe6f3; border-radius: 12px; background: #f8fafc; }
+.change-summary__stats span { display: block; color: #64748b; font-size: 12px; }
+.change-summary__stats strong { display: block; margin-top: 6px; color: #132238; font-size: 24px; }
+.change-summary__tabs :deep(.el-tabs__header) { margin-bottom: 8px; }
 .data-preview { margin-top: 12px; }
 .dialog-footer { display: flex; justify-content: flex-end; }
 .relation-design-page { display: flex; flex-direction: column; gap: 12px; }
